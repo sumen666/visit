@@ -255,6 +255,7 @@
 </script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 </head>
 <body>
 <div class="container">
@@ -478,8 +479,24 @@ window.addEventListener('offline',()=>{isOnline=false;setSyncStatus('error','离
 document.addEventListener('focusin',e=>{if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')inputFocused=true;});
 document.addEventListener('focusout',e=>{inputFocused=false;});
 
+// ========== 匿名认证 ==========
+function initAuth(){
+  if(!firebase.auth){
+    initFirebaseListener();
+    return;
+  }
+  setSyncStatus('syncing','认证中');
+  firebase.auth().signInAnonymously().then(()=>{
+    initFirebaseListener();
+  }).catch(e=>{
+    console.error('Auth failed:',e);
+    setSyncStatus('error','认证失败');
+    initFirebaseListener();
+  });
+}
+
 // ========== Init ==========
-function init(){load();bind();render();initFirebaseListener();startPullToRefresh();scrollToToday();}
+function init(){load();bind();render();initAuth();startPullToRefresh();scrollToToday();}
 document.addEventListener('DOMContentLoaded',init);
 window.__board=state;
 
