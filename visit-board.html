@@ -160,6 +160,18 @@
   .month-visit:hover .month-del{display:flex}
   .month-del:hover{background:var(--danger);color:#fff}
 
+  /* Month inline add */
+  .month-add-btn{font-size:11px;color:var(--muted);padding:2px 5px;cursor:pointer;margin-top:auto;flex-shrink:0;transition:color .15s}
+  .month-add-btn:hover{color:var(--accent)}
+  .month-cell.adding{overflow:visible !important}
+  .month-add-row{display:flex;gap:4px;align-items:center;margin-top:3px;padding:2px 0}
+  .month-add-input{flex:1;padding:3px 5px;border:1.5px solid var(--accent);border-radius:3px;font-size:11px;outline:none;background:#fff;font-family:inherit;min-width:0;box-shadow:0 0 0 2px rgba(22,119,255,.1)}
+  .month-period-toggle{display:inline-flex;background:var(--soft);border-radius:3px;padding:1px;gap:1px;flex-shrink:0}
+  .month-period-toggle button{padding:2px 5px;font-size:10px;border-radius:2px;color:var(--muted);font-weight:500;transition:all .12s}
+  .month-period-toggle button.active.am{background:var(--am-bg);color:var(--am-text)}
+  .month-period-toggle button.active.pm{background:var(--pm-bg);color:var(--pm-text)}
+  .month-add-save{flex-shrink:0;padding:3px 8px;font-size:11px}
+
   .toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.78);color:#fff;padding:10px 18px;border-radius:var(--radius-sm);font-size:13px;z-index:200;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(6px)}
   .stats-bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
@@ -219,7 +231,7 @@
     .month-grid{grid-template-columns:repeat(7,150px)}
     .month-del{display:flex;font-size:10px;opacity:.6}
     .month-visit:hover .month-del{opacity:1}
-    .inline-input,.edit-inline{font-size:16px}
+    .inline-input,.edit-inline,.month-add-input{font-size:16px}
     .inline-hint{display:none}
     .select,input[type="search"]{font-size:16px}
   }
@@ -579,9 +591,10 @@ function renderMonth(){
       }).join('');
       if(!expanded&&items.length>3)visitsHtml+=`<div class="month-more" data-zone="${fmtDate(day)}">+${items.length-3}</div>`;
     }
-    cells.push(`<div class="month-cell ${inMonth?'':'other-month'} ${today?'today':''} ${hasPending?'has-pending':''}">
+    cells.push(`<div class="month-cell ${inMonth?'in-month':''} ${inMonth?'':'other-month'} ${today?'today':''} ${hasPending?'has-pending':''}" data-mdate="${fmtDate(day)}">
       <div class="month-cell-num"><span>${day.getDate()}</span><span class="month-cell-num-dot"></span></div>
       <div class="month-visits">${visitsHtml}</div>
+      ${inMonth?`<div class="month-add-btn" data-madd="${fmtDate(day)}">+ 添加</div>`:''}
     </div>`);
   }
   $('#calendarContainer').className='calendar';
@@ -621,6 +634,30 @@ function startInlineAdd(zone){
   saveBtn.addEventListener('touchstart',e=>{e.preventDefault();commit();});
   input.addEventListener('keydown',e=>{if(e.key==='Enter')commit();if(e.key==='Escape')cancel();});
   input.addEventListener('blur',()=>setTimeout(()=>{const val=input.value.trim();if(val)commit();else cancel();},200));
+}
+
+/* ========== Month inline add ========== */
+function startMonthAdd(dateStr,cellEl){
+  if(!cellEl||cellEl.querySelector('.month-add-input'))return;
+  cellEl.classList.add('adding');
+  const addBtn=cellEl.querySelector('.month-add-btn');
+  if(addBtn)addBtn.style.display='none';
+  const row=document.createElement('div');
+  row.className='month-add-row';
+  row.innerHTML=`<div class="month-period-toggle"><button class="active am" data-p="morning">上午</button><button data-p="afternoon">下午</button></div><input class="month-add-input" placeholder="输入名称"><button class="btn btn-sm btn-primary month-add-save">✓</button>`;
+  const visitsEl=cellEl.querySelector('.month-visits');
+  visitsEl.appendChild(row);
+  let period='morning';
+  const input=row.querySelector('.month-add-input');
+  const toggleBtns=row.querySelectorAll('.month-period-toggle button');
+  toggleBtns.forEach(btn=>btn.addEventListener('click',e=>{e.stopPropagation();period=btn.dataset.p;toggleBtns.forEach(b=>{b.classList.remove('active','am','pm');if(b===btn){b.classList.add('active',period==='morning'?'am':'pm');}});}));
+  input.focus();setTimeout(()=>input.scrollIntoView({behavior:'smooth',block:'center'}),100);
+  const cleanup=()=>{cellEl.classList.remove('adding');render();};
+  const commit=()=>{const val=input.value.trim();if(!val){cleanup();return}const newId=uid();const ts=new Date().toISOString();state.visits.push({id:newId,title:val,date:dateStr,period,contact:'',phone:'',location:'',purpose:'',remark:'',status:'pending',createdAt:ts,updated_at:ts});saveVisit(newId);cleanup();toast('已添加');};
+  row.querySelector('.month-add-save').addEventListener('mousedown',e=>{e.preventDefault();commit();});
+  row.querySelector('.month-add-save').addEventListener('touchstart',e=>{e.preventDefault();commit();});
+  input.addEventListener('keydown',e=>{if(e.key==='Enter')commit();if(e.key==='Escape')cleanup();});
+  input.addEventListener('blur',()=>setTimeout(()=>{const val=input.value.trim();if(val)commit();else cleanup();},200));
 }
 
 /* ========== Inline edit title ========== */
@@ -683,19 +720,19 @@ function bind(){
     // Month "more"
     const more=e.target.closest('[data-zone]');
     if(more&&more.classList.contains('month-more')){const d=new Date(more.dataset.zone);state.refDate=d;state.view='week';$$('.seg button').forEach(b=>b.classList.toggle('active',b.dataset.view==='week'));render();return}
+    // Month add button
+    const madd=e.target.closest('[data-madd]');
+    if(madd){const mc=madd.closest('.month-cell');if(mc)startMonthAdd(madd.dataset.madd,mc);return}
     // Day cell empty area
     const cell=e.target.closest('.day-cell');
     if(cell&&!e.target.closest('[data-id]')&&!e.target.closest('[data-toggle]')&&!e.target.closest('[data-add]')){
       const zone=cell.dataset.zone;if(zone)startInlineAdd(zone);return;
     }
-    // Month cell empty area
+    // Month cell empty area - inline add
     const mcell=e.target.closest('.month-cell');
-    if(mcell&&!e.target.closest('[data-id]')&&!e.target.closest('[data-zone]')){
-      // Find the date for this cell and switch to week view + inline add
-      // We can't easily get the date here, so just switch to week view
-      const grid=mcell.closest('.month-grid');
-      if(grid){const idx=Array.from(grid.children).indexOf(mcell);const start=startOfWeek(startOfMonth(state.refDate));const thatDay=addDays(start,idx);state.refDate=thatDay;state.view='week';$$('.seg button').forEach(b=>b.classList.toggle('active',b.dataset.view==='week'));render();}
-      return;
+    if(mcell&&!e.target.closest('[data-id]')&&!e.target.closest('[data-zone]')&&!e.target.closest('[data-madd]')&&!e.target.closest('.month-add-row')){
+      const dateStr=mcell.dataset.mdate;
+      if(dateStr){startMonthAdd(dateStr,mcell);return}
     }
   });
 
