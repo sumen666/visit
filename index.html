@@ -9,7 +9,7 @@
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
 <link rel="apple-touch-icon" href="icon-1024.png">
-<link rel="apple-touch-icon" sizes="180x180" href="icon-1024.png">
+<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
 <style>
   :root{
     --bg: #fafafa; --panel: #ffffff; --border: #ececec; --text: #1f2328;
@@ -132,9 +132,11 @@
 
   /* Month view */
   .month-head-row{display:grid;grid-template-columns:repeat(7,1fr);background:var(--soft);border-bottom:1px solid var(--border)}
-  .month-grid{display:grid;grid-template-columns:repeat(7,1fr);background:var(--panel)}
+  .month-grid{display:grid;grid-template-columns:repeat(7,1fr);grid-auto-rows:110px;background:var(--panel)}
+  .month-grid.expanded{grid-auto-rows:auto}
   .month-head{background:var(--soft);padding:10px 0;text-align:center;font-size:12px;color:var(--muted);font-weight:500}
-  .month-cell{min-height:110px;border-right:1px solid var(--border);border-bottom:1px solid var(--border);padding:6px;display:flex;flex-direction:column;background:#fff;cursor:default}
+  .month-cell{border-right:1px solid var(--border);border-bottom:1px solid var(--border);padding:6px;display:flex;flex-direction:column;background:#fff;cursor:default;overflow:hidden}
+  .month-grid.expanded .month-cell{overflow:visible;min-height:110px}
   .month-cell:nth-child(7n){border-right:none}
   .month-cell.other-month{background:#fafafa;color:#bfbfbf}
   .month-cell.today{background:var(--today)}
@@ -207,7 +209,8 @@
     .add-btn{display:none}
     .day-cell.empty .add-btn{display:none}
     .day-cell.has-cards .cell-tap-hint{display:none}
-    .month-cell{min-height:85px;padding:5px}
+    .month-cell{padding:5px}
+    .month-grid{grid-auto-rows:85px}
     .month-cell-num{font-size:14px;margin-bottom:2px;white-space:nowrap}
     .month-visit{font-size:12px;padding:3px 6px}
     .month-visit-title{font-size:12px}
@@ -290,6 +293,7 @@
     </div>
     <div class="toolbar-row">
       <button class="btn btn-sm" id="todayBtn" style="border-radius:999px">今天</button>
+      <button class="btn btn-sm" id="monthToggleBtn" style="border-radius:999px;display:none">展开全部</button>
     </div>
     <div class="toolbar-row">
       <div class="filter-row">
@@ -316,7 +320,7 @@
 <script>
 /* ========== Firebase & Storage ========== */
 const STORAGE_KEY = 'visit_board_v3';
-const state = { view:'week', refDate:new Date(), filterPeriod:'all', filterStatus:'all', search:'', visits:[], syncStatus:'' };
+const state = { view:'week', refDate:new Date(), filterPeriod:'all', filterStatus:'all', search:'', visits:[], syncStatus:'', monthExpanded:false };
 
 // ===== Firebase 配置 =====
 const FIREBASE_CONFIG = {
@@ -557,13 +561,14 @@ function renderMonth(){
   const first=startOfMonth(d),startGrid=startOfWeek(first);
   const heads=['一','二','三','四','五','六','日'].map(n=>`<div class="month-head">${n}</div>`).join('');
   const cells=[];
+  const expanded=state.monthExpanded;
   for(let i=0;i<42;i++){
     const day=addDays(startGrid,i),inMonth=day.getMonth()===d.getMonth(),today=isToday(day);
     const items=visible.filter(v=>v.date===fmtDate(day));
     const hasPending=items.some(v=>v.status==='pending');
     let visitsHtml='';
     if(items.length){
-      const show=items.slice(0,3);
+      const show=expanded?items:items.slice(0,3);
       visitsHtml=show.map(v=>{
         const done=v.status==='completed',cc=cardClass(v.period);
         return `<div class="month-visit ${cc} ${done?'completed':''}" data-id="${v.id}">
@@ -572,7 +577,7 @@ function renderMonth(){
           <span class="month-del" data-delete="${v.id}">×</span>
         </div>`;
       }).join('');
-      if(items.length>3)visitsHtml+=`<div class="month-more" data-zone="${fmtDate(day)}">+${items.length-3}</div>`;
+      if(!expanded&&items.length>3)visitsHtml+=`<div class="month-more" data-zone="${fmtDate(day)}">+${items.length-3}</div>`;
     }
     cells.push(`<div class="month-cell ${inMonth?'':'other-month'} ${today?'today':''} ${hasPending?'has-pending':''}">
       <div class="month-cell-num"><span>${day.getDate()}</span><span class="month-cell-num-dot"></span></div>
@@ -580,10 +585,19 @@ function renderMonth(){
     </div>`);
   }
   $('#calendarContainer').className='calendar';
-  $('#calendarContainer').innerHTML=`<div class="month-head-row">${heads}</div><div class="month-grid">${cells.join('')}</div>`;
+  $('#calendarContainer').innerHTML=`<div class="month-head-row">${heads}</div><div class="month-grid ${expanded?'expanded':''}">${cells.join('')}</div>`;
 }
 
-function render(){renderNav();if(state.view==='week')renderWeek();else renderMonth();stats();}
+function render(){
+  renderNav();
+  if(state.view==='week')renderWeek();else renderMonth();
+  const toggleBtn=$('#monthToggleBtn');
+  if(toggleBtn){
+    toggleBtn.style.display=state.view==='month'?'inline-flex':'none';
+    toggleBtn.textContent=state.monthExpanded?'收起':'展开全部';
+  }
+  stats();
+}
 
 /* ========== Inline add ========== */
 function startInlineAdd(zone){
@@ -644,6 +658,10 @@ function bind(){
   $('#prevBtn').addEventListener('click',()=>{if(state.view==='week')state.refDate=addDays(state.refDate,-7);else state.refDate=addMonths(state.refDate,-1);render();});
   $('#nextBtn').addEventListener('click',()=>{if(state.view==='week')state.refDate=addDays(state.refDate,7);else state.refDate=addMonths(state.refDate,1);render();});
   $('#todayBtn').addEventListener('click',goToToday);
+  $('#monthToggleBtn').addEventListener('click',()=>{
+    state.monthExpanded=!state.monthExpanded;
+    render();
+  });
   $('#filterPeriod').addEventListener('change',e=>{state.filterPeriod=e.target.value;render();});
   $('#filterStatus').addEventListener('change',e=>{state.filterStatus=e.target.value;render();});
   let st;$('#searchInput').addEventListener('input',e=>{clearTimeout(st);st=setTimeout(()=>{state.search=e.target.value.trim();render();},150);});
