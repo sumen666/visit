@@ -305,7 +305,6 @@
     </div>
     <div class="toolbar-row">
       <button class="btn btn-sm" id="todayBtn" style="border-radius:999px">今天</button>
-      <button class="btn btn-sm" id="monthToggleBtn" style="border-radius:999px;display:none">展开全部</button>
     </div>
     <div class="toolbar-row">
       <div class="filter-row">
@@ -332,7 +331,7 @@
 <script>
 /* ========== Firebase & Storage ========== */
 const STORAGE_KEY = 'visit_board_v3';
-const state = { view:'week', refDate:new Date(), filterPeriod:'all', filterStatus:'all', search:'', visits:[], syncStatus:'', monthExpanded:false };
+const state = { view:'week', refDate:new Date(), filterPeriod:'all', filterStatus:'all', search:'', visits:[], syncStatus:'', monthExpanded:true };
 
 // ===== Firebase 配置 =====
 const FIREBASE_CONFIG = {
@@ -604,11 +603,6 @@ function renderMonth(){
 function render(){
   renderNav();
   if(state.view==='week')renderWeek();else renderMonth();
-  const toggleBtn=$('#monthToggleBtn');
-  if(toggleBtn){
-    toggleBtn.style.display=state.view==='month'?'inline-flex':'none';
-    toggleBtn.textContent=state.monthExpanded?'收起':'展开全部';
-  }
   stats();
 }
 
@@ -650,7 +644,15 @@ function startMonthAdd(dateStr,cellEl){
   let period='morning';
   const input=row.querySelector('.month-add-input');
   const toggleBtns=row.querySelectorAll('.month-period-toggle button');
-  toggleBtns.forEach(btn=>btn.addEventListener('click',e=>{e.stopPropagation();period=btn.dataset.p;toggleBtns.forEach(b=>{b.classList.remove('active','am','pm');if(b===btn){b.classList.add('active',period==='morning'?'am':'pm');}});}));
+  toggleBtns.forEach(btn=>{
+    btn.addEventListener('mousedown',e=>{e.preventDefault();});
+    btn.addEventListener('touchstart',e=>{e.preventDefault();});
+    btn.addEventListener('click',e=>{
+      e.stopPropagation();
+      period=btn.dataset.p;
+      toggleBtns.forEach(b=>{b.classList.remove('active','am','pm');if(b===btn){b.classList.add('active',period==='morning'?'am':'pm');}});
+    });
+  });
   input.focus();setTimeout(()=>input.scrollIntoView({behavior:'smooth',block:'center'}),100);
   const cleanup=()=>{cellEl.classList.remove('adding');render();};
   const commit=()=>{const val=input.value.trim();if(!val){cleanup();return}const newId=uid();const ts=new Date().toISOString();state.visits.push({id:newId,title:val,date:dateStr,period,contact:'',phone:'',location:'',purpose:'',remark:'',status:'pending',createdAt:ts,updated_at:ts});saveVisit(newId);cleanup();toast('已添加');};
@@ -695,10 +697,6 @@ function bind(){
   $('#prevBtn').addEventListener('click',()=>{if(state.view==='week')state.refDate=addDays(state.refDate,-7);else state.refDate=addMonths(state.refDate,-1);render();});
   $('#nextBtn').addEventListener('click',()=>{if(state.view==='week')state.refDate=addDays(state.refDate,7);else state.refDate=addMonths(state.refDate,1);render();});
   $('#todayBtn').addEventListener('click',goToToday);
-  $('#monthToggleBtn').addEventListener('click',()=>{
-    state.monthExpanded=!state.monthExpanded;
-    render();
-  });
   $('#filterPeriod').addEventListener('change',e=>{state.filterPeriod=e.target.value;render();});
   $('#filterStatus').addEventListener('change',e=>{state.filterStatus=e.target.value;render();});
   let st;$('#searchInput').addEventListener('input',e=>{clearTimeout(st);st=setTimeout(()=>{state.search=e.target.value.trim();render();},150);});
