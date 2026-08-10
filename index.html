@@ -503,7 +503,20 @@ document.addEventListener('focusin',e=>{if(e.target.tagName==='INPUT'||e.target.
 document.addEventListener('focusout',e=>{inputFocused=false;});
 
 // ========== Init ==========
-function init(){load();bind();render();initFirebaseListener();startPullToRefresh();scrollToToday();}
+/* Migrate: assign order to visits that don't have one */
+function migrateOrders(){
+  const groups={};
+  state.visits.forEach(v=>{const k=`${v.date}|${v.period}`;if(!groups[k])groups[k]=[];groups[k].push(v);});
+  const toSave=[];
+  Object.values(groups).forEach(group=>{
+    if(!group.some(v=>v.order==null))return;
+    group.sort((a,b)=>{const sa=a.status==='completed'?1:0,sb=b.status==='completed'?1:0;if(sa!==sb)return sa-sb;const oa=a.order??0,ob=b.order??0;if(oa!==ob)return oa-ob;return new Date(a.createdAt||0).getTime()-new Date(b.createdAt||0).getTime();});
+    const base=Date.now();
+    group.forEach((v,i)=>{if(v.order==null){v.order=base+i;v.updated_at=new Date().toISOString();toSave.push(v.id);}});
+  });
+  if(toSave.length){saveLocal();toSave.forEach(id=>saveVisit(id));}
+}
+function init(){load();migrateOrders();bind();render();initFirebaseListener();startPullToRefresh();scrollToToday();}
 document.addEventListener('DOMContentLoaded',init);
 window.__board=state;
 
@@ -554,7 +567,7 @@ function renderWeek(){
 function renderDayCell(items,day,period,today){
   const cClass=cardClass(period),zone=`${fmtDate(day)}|${period}`;
   const cards=items
-    .sort((a,b)=>{const sa=a.status==='completed'?1:0,sb=b.status==='completed'?1:0;if(sa!==sb)return sa-sb;return(a.order||0)-(b.order||0);})
+    .sort((a,b)=>{const sa=a.status==='completed'?1:0,sb=b.status==='completed'?1:0;if(sa!==sb)return sa-sb;return(a.order??0)-(b.order??0);})
     .map(v=>{
       const done=v.status==='completed';
       return `<div class="visit-card ${cClass} ${done?'completed':''}" data-id="${v.id}" draggable="true">
@@ -584,7 +597,7 @@ function renderMonth(){
   const expanded=state.monthExpanded;
   for(let i=0;i<42;i++){
     const day=addDays(startGrid,i),inMonth=day.getMonth()===d.getMonth(),today=isToday(day);
-    const items=visible.filter(v=>v.date===fmtDate(day)).sort((a,b)=>{if(a.period!==b.period)return a.period==='morning'?-1:1;const sa=a.status==='completed'?1:0,sb=b.status==='completed'?1:0;if(sa!==sb)return sa-sb;return(a.order||0)-(b.order||0);});
+    const items=visible.filter(v=>v.date===fmtDate(day)).sort((a,b)=>{if(a.period!==b.period)return a.period==='morning'?-1:1;const sa=a.status==='completed'?1:0,sb=b.status==='completed'?1:0;if(sa!==sb)return sa-sb;return(a.order??0)-(b.order??0);});
     const hasPending=items.some(v=>v.status==='pending');
     let visitsHtml='';
     if(items.length){
@@ -714,17 +727,17 @@ function calcNewOrder(dragId,targetCardEl,y,date,period){
   if(!targetVisit||targetVisit.date!==date||targetVisit.period!==period)return null;
   const others=state.visits
     .filter(v=>v.date===date&&v.period===period&&v.id!==dragId)
-    .sort((a,b)=>{const sa=a.status==='completed'?1:0,sb=b.status==='completed'?1:0;if(sa!==sb)return sa-sb;return(a.order||0)-(b.order||0);});
+    .sort((a,b)=>{const sa=a.status==='completed'?1:0,sb=b.status==='completed'?1:0;if(sa!==sb)return sa-sb;return(a.order??0)-(b.order??0);});
   const targetIdx=others.findIndex(v=>v.id===targetId);if(targetIdx===-1)return null;
   const rect=targetCardEl.getBoundingClientRect();
   const isAbove=(y-rect.top)<rect.height/2;
   let newOrder;
   if(isAbove){
-    if(targetIdx===0){newOrder=(others[0].order||Date.now())-1;}
-    else{newOrder=((others[targetIdx-1].order||0)+(others[targetIdx].order||0))/2;}
+    if(targetIdx===0){newOrder=(others[0].order??0)-1;}
+    else{newOrder=((others[targetIdx-1].order??0)+(others[targetIdx].order??0))/2;}
   }else{
-    if(targetIdx===others.length-1){newOrder=(others[targetIdx].order||Date.now())+1;}
-    else{newOrder=((others[targetIdx].order||0)+(others[targetIdx+1].order||0))/2;}
+    if(targetIdx===others.length-1){newOrder=(others[targetIdx].order??0)+1;}
+    else{newOrder=((others[targetIdx].order??0)+(others[targetIdx+1].order??0))/2;}
   }
   return newOrder;
 }
@@ -749,6 +762,19 @@ function moveVisit(id,newDate,newPeriod,targetCardEl,y){
   }
   if(changed){saveVisit(id);render();toast(isSame?'已排序':'已移动');}
 }
+/* Find nearest card in cell when cursor is not directly on a card (e.g. cell padding) */
+function findNearestCard(cell,y,dragId,targetDate,targetPeriod){
+  const cellCards=Array.from(cell.querySelectorAll('[data-id]'))
+    .filter(c=>c.dataset.id!==dragId)
+    .filter(c=>{const v=state.visits.find(x=>x.id===c.dataset.id);return v&&v.date===targetDate&&v.period===targetPeriod;})
+    .sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top);
+  if(!cellCards.length)return null;
+  for(const c of cellCards){
+    const r=c.getBoundingClientRect();
+    if(y<r.bottom)return{card:c,isAbove:(y-r.top)<r.height/2};
+  }
+  return{card:cellCards[cellCards.length-1],isAbove:false};
+}
 /* Highlight during drag: insertion line for reorder, cell highlight for plain move */
 function highlightDrop(dragId,x,y,ghost){
   clearDropHighlights();
@@ -764,16 +790,18 @@ function highlightDrop(dragId,x,y,ghost){
   let targetDate,targetPeriod;
   if(cell.classList.contains('day-cell')){[targetDate,targetPeriod]=cell.dataset.zone.split('|');}
   else{targetDate=cell.dataset.mdate;const rect=cell.getBoundingClientRect();targetPeriod=(y-rect.top)<rect.height/2?'morning':'afternoon';}
-  // Hovering over a card in target date+period → show insertion line (works for both same-day and cross-date)
+  // Direct card hit in target date+period → show insertion line
   if(card&&card.dataset.id!==dragId){
     const cardVisit=state.visits.find(v=>v.id===card.dataset.id);
     if(cardVisit&&cardVisit.date===targetDate&&cardVisit.period===targetPeriod){
       const rect=card.getBoundingClientRect();
-      const isAbove=(y-rect.top)<rect.height/2;
-      card.classList.add(isAbove?'drop-before':'drop-after');
+      card.classList.add((y-rect.top)<rect.height/2?'drop-before':'drop-after');
       return;
     }
   }
+  // No direct card hit → find nearest card in cell (handles cell padding area)
+  const nearest=findNearestCard(cell,y,dragId,targetDate,targetPeriod);
+  if(nearest){nearest.card.classList.add(nearest.isAbove?'drop-before':'drop-after');return;}
   highlightCell(cell,y);
 }
 function handleDrop(id,cell,x,y,targetCard){
@@ -781,10 +809,21 @@ function handleDrop(id,cell,x,y,targetCard){
   let targetDate,targetPeriod;
   if(cell.classList.contains('day-cell')){[targetDate,targetPeriod]=cell.dataset.zone.split('|');}
   else if(cell.classList.contains('month-cell')){targetDate=cell.dataset.mdate;const rect=cell.getBoundingClientRect();targetPeriod=(y-rect.top)<rect.height/2?'morning':'afternoon';}
+  // Validate target card: must be in target date+period and not the dragged item
+  let validCard=targetCard;
+  if(validCard){
+    const cv=state.visits.find(v=>v.id===validCard.dataset.id);
+    if(!cv||cv.date!==targetDate||cv.period!==targetPeriod||validCard.dataset.id===id)validCard=null;
+  }
+  // No valid card → find nearest card in cell (handles cell padding area)
+  if(!validCard){
+    const nearest=findNearestCard(cell,y,id,targetDate,targetPeriod);
+    if(nearest)validCard=nearest.card;
+  }
   if(dragVisit.date===targetDate&&dragVisit.period===targetPeriod){
-    if(targetCard&&targetCard.dataset.id!==id){reorderVisit(id,targetCard,y);}
+    if(validCard)reorderVisit(id,validCard,y);
   }else{
-    moveVisit(id,targetDate,targetPeriod,targetCard,y);
+    moveVisit(id,targetDate,targetPeriod,validCard,y);
   }
 }
 function findTargetAtPoint(x,y,ghost){
