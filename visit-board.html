@@ -699,6 +699,10 @@ function deleteVisit(id){
 function moveVisit(id,newDate,newPeriod){
   const v=state.visits.find(x=>x.id===id);if(!v)return;
   if(v.date===newDate&&v.period===newPeriod)return;
+  const pName=newPeriod==='morning'?'上午':'下午';
+  const oName=v.period==='morning'?'上午':'下午';
+  const dateLabel=`${newDate.slice(5).replace('-','月')}日 ${pName}`;
+  if(!confirm(`确定将「${escapeHtml(v.title)}」移动到 ${dateLabel} 吗？`))return;
   v.date=newDate;v.period=newPeriod;v.updated_at=new Date().toISOString();
   saveVisit(id);render();toast('已移动');
 }
