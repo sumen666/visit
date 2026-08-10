@@ -178,6 +178,8 @@
   .month-cell.drop-target-am{background:var(--am-bg)!important;box-shadow:inset 0 0 0 2px var(--am-color)}
   .month-cell.drop-target-pm{background:var(--pm-bg)!important;box-shadow:inset 0 0 0 2px var(--pm-color)}
   .drag-ghost{position:fixed;pointer-events:none;z-index:9999;opacity:.88;transform:scale(.92) rotate(-1deg);box-shadow:0 6px 20px rgba(0,0,0,.18);border-radius:6px;max-width:200px}
+  .visit-card.drop-before::before,.month-visit.drop-before::before{content:"";position:absolute;top:-4px;left:0;right:0;height:3px;background:var(--accent);border-radius:2px;z-index:3}
+  .visit-card.drop-after::after,.month-visit.drop-after::after{content:"";position:absolute;bottom:-4px;left:0;right:0;height:3px;background:var(--accent);border-radius:2px;z-index:3}
 
   .toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.78);color:#fff;padding:10px 18px;border-radius:var(--radius-sm);font-size:13px;z-index:200;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(6px)}
@@ -552,7 +554,7 @@ function renderWeek(){
 function renderDayCell(items,day,period,today){
   const cClass=cardClass(period),zone=`${fmtDate(day)}|${period}`;
   const cards=items
-    .sort((a,b)=>(a.status==='completed'?1:0)-(b.status==='completed'?1:0))
+    .sort((a,b)=>{const sa=a.status==='completed'?1:0,sb=b.status==='completed'?1:0;if(sa!==sb)return sa-sb;return(a.order||0)-(b.order||0);})
     .map(v=>{
       const done=v.status==='completed';
       return `<div class="visit-card ${cClass} ${done?'completed':''}" data-id="${v.id}" draggable="true">
@@ -582,7 +584,7 @@ function renderMonth(){
   const expanded=state.monthExpanded;
   for(let i=0;i<42;i++){
     const day=addDays(startGrid,i),inMonth=day.getMonth()===d.getMonth(),today=isToday(day);
-    const items=visible.filter(v=>v.date===fmtDate(day));
+    const items=visible.filter(v=>v.date===fmtDate(day)).sort((a,b)=>{if(a.period!==b.period)return a.period==='morning'?-1:1;const sa=a.status==='completed'?1:0,sb=b.status==='completed'?1:0;if(sa!==sb)return sa-sb;return(a.order||0)-(b.order||0);});
     const hasPending=items.some(v=>v.status==='pending');
     let visitsHtml='';
     if(items.length){
@@ -628,7 +630,7 @@ function startInlineAdd(zone){
     const[date,period]=zone.split('|');
     const newId=uid();
     const ts=new Date().toISOString();
-    state.visits.push({id:newId,title:val,date,period,contact:'',phone:'',location:'',purpose:'',remark:'',status:'pending',createdAt:ts,updated_at:ts});
+    state.visits.push({id:newId,title:val,date,period,contact:'',phone:'',location:'',purpose:'',remark:'',status:'pending',createdAt:ts,updated_at:ts,order:Date.now()});
     saveVisit(newId);render();toast('已添加');
   };
   saveBtn.addEventListener('mousedown',e=>{e.preventDefault();commit();});
@@ -662,7 +664,7 @@ function startMonthAdd(dateStr,cellEl){
   });
   input.focus();setTimeout(()=>input.scrollIntoView({behavior:'smooth',block:'center'}),100);
   const cleanup=()=>{cellEl.classList.remove('adding');render();};
-  const commit=()=>{const val=input.value.trim();if(!val){cleanup();return}const newId=uid();const ts=new Date().toISOString();state.visits.push({id:newId,title:val,date:dateStr,period,contact:'',phone:'',location:'',purpose:'',remark:'',status:'pending',createdAt:ts,updated_at:ts});saveVisit(newId);cleanup();toast('已添加');};
+  const commit=()=>{const val=input.value.trim();if(!val){cleanup();return}const newId=uid();const ts=new Date().toISOString();state.visits.push({id:newId,title:val,date:dateStr,period,contact:'',phone:'',location:'',purpose:'',remark:'',status:'pending',createdAt:ts,updated_at:ts,order:Date.now()});saveVisit(newId);cleanup();toast('已添加');};
   row.querySelector('.month-add-save').addEventListener('mousedown',e=>{e.preventDefault();commit();});
   row.querySelector('.month-add-save').addEventListener('touchstart',e=>{e.preventDefault();commit();});
   input.addEventListener('keydown',e=>{if(e.key==='Enter')commit();if(e.key==='Escape')cleanup();});
@@ -706,9 +708,8 @@ function moveVisit(id,newDate,newPeriod){
   v.date=newDate;v.period=newPeriod;v.updated_at=new Date().toISOString();
   saveVisit(id);render();toast('已移动');
 }
-function clearDropHighlights(){document.querySelectorAll('.drop-target,.drop-target-am,.drop-target-pm').forEach(el=>el.classList.remove('drop-target','drop-target-am','drop-target-pm'));}
+function clearDropHighlights(){document.querySelectorAll('.drop-target,.drop-target-am,.drop-target-pm,.drop-before,.drop-after').forEach(el=>el.classList.remove('drop-target','drop-target-am','drop-target-pm','drop-before','drop-after'));}
 function highlightCell(cell,y){
-  clearDropHighlights();
   if(cell.classList.contains('day-cell')){cell.classList.add('drop-target');return}
   if(cell.classList.contains('month-cell')){
     const rect=cell.getBoundingClientRect();
@@ -716,15 +717,76 @@ function highlightCell(cell,y){
     cell.classList.add(isAM?'drop-target-am':'drop-target-pm');
   }
 }
-function handleDrop(id,cell,x,y){
-  if(cell.classList.contains('day-cell')){const[date,period]=cell.dataset.zone.split('|');moveVisit(id,date,period);}
-  else if(cell.classList.contains('month-cell')){const date=cell.dataset.mdate;const rect=cell.getBoundingClientRect();const isAM=(y-rect.top)<rect.height/2;moveVisit(id,date,isAM?'morning':'afternoon');}
+/* Reorder within same date+period */
+function reorderVisit(dragId,targetCardEl,y){
+  const dragVisit=state.visits.find(v=>v.id===dragId);if(!dragVisit)return;
+  const targetId=targetCardEl.dataset.id;if(targetId===dragId)return;
+  const targetVisit=state.visits.find(v=>v.id===targetId);if(!targetVisit)return;
+  if(dragVisit.date!==targetVisit.date||dragVisit.period!==targetVisit.period)return;
+  // Get siblings (same date+period, excluding dragged), sorted by current order
+  const others=state.visits
+    .filter(v=>v.date===dragVisit.date&&v.period===dragVisit.period&&v.id!==dragId)
+    .sort((a,b)=>{const sa=a.status==='completed'?1:0,sb=b.status==='completed'?1:0;if(sa!==sb)return sa-sb;return(a.order||0)-(b.order||0);});
+  const targetIdx=others.findIndex(v=>v.id===targetId);if(targetIdx===-1)return;
+  const rect=targetCardEl.getBoundingClientRect();
+  const isAbove=(y-rect.top)<rect.height/2;
+  // Calculate new order: average of neighbors, or ±1 at boundaries
+  let newOrder;
+  if(isAbove){
+    if(targetIdx===0){newOrder=(others[0].order||Date.now())-1;}
+    else{newOrder=((others[targetIdx-1].order||0)+(others[targetIdx].order||0))/2;}
+  }else{
+    if(targetIdx===others.length-1){newOrder=(others[targetIdx].order||Date.now())+1;}
+    else{newOrder=((others[targetIdx].order||0)+(others[targetIdx+1].order||0))/2;}
+  }
+  if(dragVisit.order===newOrder)return;
+  dragVisit.order=newOrder;dragVisit.updated_at=new Date().toISOString();
+  saveVisit(dragId);render();toast('已排序');
 }
-function findCellAtPoint(x,y,ghost){
+/* Highlight during drag: insertion line for same-day reorder, cell highlight for move */
+function highlightDrop(dragId,x,y,ghost){
+  clearDropHighlights();
   if(ghost)ghost.style.display='none';
   const el=document.elementFromPoint(x,y);
   if(ghost)ghost.style.display='';
-  return el?el.closest('.day-cell,.month-cell'):null;
+  if(!el)return;
+  const card=el.closest('[data-id]');
+  const cell=el.closest('.day-cell,.month-cell');
+  if(!cell)return;
+  const dragVisit=state.visits.find(v=>v.id===dragId);
+  if(!dragVisit){highlightCell(cell,y);return;}
+  // Determine target date+period from cell
+  let targetDate,targetPeriod;
+  if(cell.classList.contains('day-cell')){[targetDate,targetPeriod]=cell.dataset.zone.split('|');}
+  else{targetDate=cell.dataset.mdate;const rect=cell.getBoundingClientRect();targetPeriod=(y-rect.top)<rect.height/2?'morning':'afternoon';}
+  // Same date+period and hovering over a different card → show insertion line
+  if(dragVisit.date===targetDate&&dragVisit.period===targetPeriod&&card&&card.dataset.id!==dragId){
+    const rect=card.getBoundingClientRect();
+    const isAbove=(y-rect.top)<rect.height/2;
+    card.classList.add(isAbove?'drop-before':'drop-after');
+  }else{
+    highlightCell(cell,y);
+  }
+}
+function handleDrop(id,cell,x,y,targetCard){
+  const dragVisit=state.visits.find(v=>v.id===id);if(!dragVisit)return;
+  // Determine target date+period
+  let targetDate,targetPeriod;
+  if(cell.classList.contains('day-cell')){[targetDate,targetPeriod]=cell.dataset.zone.split('|');}
+  else if(cell.classList.contains('month-cell')){targetDate=cell.dataset.mdate;const rect=cell.getBoundingClientRect();targetPeriod=(y-rect.top)<rect.height/2?'morning':'afternoon';}
+  // Same date+period → reorder; different → move
+  if(dragVisit.date===targetDate&&dragVisit.period===targetPeriod){
+    if(targetCard&&targetCard.dataset.id!==id){reorderVisit(id,targetCard,y);}
+  }else{
+    moveVisit(id,targetDate,targetPeriod);
+  }
+}
+function findTargetAtPoint(x,y,ghost){
+  if(ghost)ghost.style.display='none';
+  const el=document.elementFromPoint(x,y);
+  if(ghost)ghost.style.display='';
+  if(!el)return{cell:null,card:null};
+  return{cell:el.closest('.day-cell,.month-cell'),card:el.closest('[data-id]')};
 }
 
 /* ========== Events ========== */
@@ -789,13 +851,13 @@ function bind(){
   });
   cal.addEventListener('dragover',e=>{
     if(!dragId)return;e.preventDefault();
-    const cell=e.target.closest('.day-cell,.month-cell');
-    if(cell)highlightCell(cell,e.clientY);else clearDropHighlights();
+    highlightDrop(dragId,e.clientX,e.clientY,null);
   });
   cal.addEventListener('drop',e=>{
     e.preventDefault();if(!dragId)return;
     const cell=e.target.closest('.day-cell,.month-cell');
-    if(cell)handleDrop(dragId,cell,e.clientX,e.clientY);
+    const targetCard=e.target.closest('[data-id]');
+    if(cell)handleDrop(dragId,cell,e.clientX,e.clientY,targetCard);
     clearDropHighlights();dragId=null;
   });
 
@@ -831,8 +893,7 @@ function bind(){
     }
     e.preventDefault();
     if(touchDrag.ghost){touchDrag.ghost.style.left=(touch.clientX-30)+'px';touchDrag.ghost.style.top=(touch.clientY-20)+'px';}
-    const cell=findCellAtPoint(touch.clientX,touch.clientY,touchDrag.ghost);
-    if(cell)highlightCell(cell,touch.clientY);else clearDropHighlights();
+    highlightDrop(touchDrag.id,touch.clientX,touch.clientY,touchDrag.ghost);
   },{passive:false});
   cal.addEventListener('touchend',e=>{
     if(!touchDrag){return;}
@@ -840,8 +901,8 @@ function bind(){
     if(touchDrag.active){
       e.preventDefault();
       const touch=e.changedTouches[0];
-      const cell=findCellAtPoint(touch.clientX,touch.clientY,touchDrag.ghost);
-      if(cell)handleDrop(touchDrag.id,cell,touch.clientX,touch.clientY);
+      const {cell,card}=findTargetAtPoint(touch.clientX,touch.clientY,touchDrag.ghost);
+      if(cell)handleDrop(touchDrag.id,cell,touch.clientX,touch.clientY,card);
       if(touchDrag.ghost)touchDrag.ghost.remove();
       if(touchDrag.cardEl)touchDrag.cardEl.classList.remove('dragging');
       clearDropHighlights();
