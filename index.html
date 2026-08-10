@@ -697,17 +697,7 @@ function deleteVisit(id){
   state.visits=state.visits.filter(v=>v.id!==id);saveDelete(id);render();toast('已删除');
 }
 
-/* ========== Drag move ========== */
-function moveVisit(id,newDate,newPeriod){
-  const v=state.visits.find(x=>x.id===id);if(!v)return;
-  if(v.date===newDate&&v.period===newPeriod)return;
-  const pName=newPeriod==='morning'?'上午':'下午';
-  const oName=v.period==='morning'?'上午':'下午';
-  const dateLabel=`${newDate.slice(5).replace('-','月')}日 ${pName}`;
-  if(!confirm(`确定将「${escapeHtml(v.title)}」移动到 ${dateLabel} 吗？`))return;
-  v.date=newDate;v.period=newPeriod;v.updated_at=new Date().toISOString();
-  saveVisit(id);render();toast('已移动');
-}
+/* ========== Drag move + reorder ========== */
 function clearDropHighlights(){document.querySelectorAll('.drop-target,.drop-target-am,.drop-target-pm,.drop-before,.drop-after').forEach(el=>el.classList.remove('drop-target','drop-target-am','drop-target-pm','drop-before','drop-after'));}
 function highlightCell(cell,y){
   if(cell.classList.contains('day-cell')){cell.classList.add('drop-target');return}
@@ -717,20 +707,17 @@ function highlightCell(cell,y){
     cell.classList.add(isAM?'drop-target-am':'drop-target-pm');
   }
 }
-/* Reorder within same date+period */
-function reorderVisit(dragId,targetCardEl,y){
-  const dragVisit=state.visits.find(v=>v.id===dragId);if(!dragVisit)return;
-  const targetId=targetCardEl.dataset.id;if(targetId===dragId)return;
-  const targetVisit=state.visits.find(v=>v.id===targetId);if(!targetVisit)return;
-  if(dragVisit.date!==targetVisit.date||dragVisit.period!==targetVisit.period)return;
-  // Get siblings (same date+period, excluding dragged), sorted by current order
+/* Calculate new order value for dragId relative to targetCardEl */
+function calcNewOrder(dragId,targetCardEl,y,date,period){
+  const targetId=targetCardEl.dataset.id;if(targetId===dragId)return null;
+  const targetVisit=state.visits.find(v=>v.id===targetId);
+  if(!targetVisit||targetVisit.date!==date||targetVisit.period!==period)return null;
   const others=state.visits
-    .filter(v=>v.date===dragVisit.date&&v.period===dragVisit.period&&v.id!==dragId)
+    .filter(v=>v.date===date&&v.period===period&&v.id!==dragId)
     .sort((a,b)=>{const sa=a.status==='completed'?1:0,sb=b.status==='completed'?1:0;if(sa!==sb)return sa-sb;return(a.order||0)-(b.order||0);});
-  const targetIdx=others.findIndex(v=>v.id===targetId);if(targetIdx===-1)return;
+  const targetIdx=others.findIndex(v=>v.id===targetId);if(targetIdx===-1)return null;
   const rect=targetCardEl.getBoundingClientRect();
   const isAbove=(y-rect.top)<rect.height/2;
-  // Calculate new order: average of neighbors, or ±1 at boundaries
   let newOrder;
   if(isAbove){
     if(targetIdx===0){newOrder=(others[0].order||Date.now())-1;}
@@ -739,11 +726,30 @@ function reorderVisit(dragId,targetCardEl,y){
     if(targetIdx===others.length-1){newOrder=(others[targetIdx].order||Date.now())+1;}
     else{newOrder=((others[targetIdx].order||0)+(others[targetIdx+1].order||0))/2;}
   }
-  if(dragVisit.order===newOrder)return;
+  return newOrder;
+}
+/* Reorder within same date+period */
+function reorderVisit(dragId,targetCardEl,y){
+  const dragVisit=state.visits.find(v=>v.id===dragId);if(!dragVisit)return;
+  const newOrder=calcNewOrder(dragId,targetCardEl,y,dragVisit.date,dragVisit.period);
+  if(newOrder===null||dragVisit.order===newOrder)return;
   dragVisit.order=newOrder;dragVisit.updated_at=new Date().toISOString();
   saveVisit(dragId);render();toast('已排序');
 }
-/* Highlight during drag: insertion line for same-day reorder, cell highlight for move */
+/* Move (cross-date) without confirmation, with optional reorder */
+function moveVisit(id,newDate,newPeriod,targetCardEl,y){
+  const v=state.visits.find(x=>x.id===id);if(!v)return;
+  const isSame=v.date===newDate&&v.period===newPeriod;
+  if(isSame&&!targetCardEl)return;
+  let changed=false;
+  if(!isSame){v.date=newDate;v.period=newPeriod;v.updated_at=new Date().toISOString();changed=true;}
+  if(targetCardEl&&targetCardEl.dataset.id!==id){
+    const newOrder=calcNewOrder(id,targetCardEl,y,newDate,newPeriod);
+    if(newOrder!==null&&v.order!==newOrder){v.order=newOrder;v.updated_at=new Date().toISOString();changed=true;}
+  }
+  if(changed){saveVisit(id);render();toast(isSame?'已排序':'已移动');}
+}
+/* Highlight during drag: insertion line for reorder, cell highlight for plain move */
 function highlightDrop(dragId,x,y,ghost){
   clearDropHighlights();
   if(ghost)ghost.style.display='none';
@@ -755,30 +761,30 @@ function highlightDrop(dragId,x,y,ghost){
   if(!cell)return;
   const dragVisit=state.visits.find(v=>v.id===dragId);
   if(!dragVisit){highlightCell(cell,y);return;}
-  // Determine target date+period from cell
   let targetDate,targetPeriod;
   if(cell.classList.contains('day-cell')){[targetDate,targetPeriod]=cell.dataset.zone.split('|');}
   else{targetDate=cell.dataset.mdate;const rect=cell.getBoundingClientRect();targetPeriod=(y-rect.top)<rect.height/2?'morning':'afternoon';}
-  // Same date+period and hovering over a different card → show insertion line
-  if(dragVisit.date===targetDate&&dragVisit.period===targetPeriod&&card&&card.dataset.id!==dragId){
-    const rect=card.getBoundingClientRect();
-    const isAbove=(y-rect.top)<rect.height/2;
-    card.classList.add(isAbove?'drop-before':'drop-after');
-  }else{
-    highlightCell(cell,y);
+  // Hovering over a card in target date+period → show insertion line (works for both same-day and cross-date)
+  if(card&&card.dataset.id!==dragId){
+    const cardVisit=state.visits.find(v=>v.id===card.dataset.id);
+    if(cardVisit&&cardVisit.date===targetDate&&cardVisit.period===targetPeriod){
+      const rect=card.getBoundingClientRect();
+      const isAbove=(y-rect.top)<rect.height/2;
+      card.classList.add(isAbove?'drop-before':'drop-after');
+      return;
+    }
   }
+  highlightCell(cell,y);
 }
 function handleDrop(id,cell,x,y,targetCard){
   const dragVisit=state.visits.find(v=>v.id===id);if(!dragVisit)return;
-  // Determine target date+period
   let targetDate,targetPeriod;
   if(cell.classList.contains('day-cell')){[targetDate,targetPeriod]=cell.dataset.zone.split('|');}
   else if(cell.classList.contains('month-cell')){targetDate=cell.dataset.mdate;const rect=cell.getBoundingClientRect();targetPeriod=(y-rect.top)<rect.height/2?'morning':'afternoon';}
-  // Same date+period → reorder; different → move
   if(dragVisit.date===targetDate&&dragVisit.period===targetPeriod){
     if(targetCard&&targetCard.dataset.id!==id){reorderVisit(id,targetCard,y);}
   }else{
-    moveVisit(id,targetDate,targetPeriod);
+    moveVisit(id,targetDate,targetPeriod,targetCard,y);
   }
 }
 function findTargetAtPoint(x,y,ghost){
