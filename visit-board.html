@@ -172,6 +172,13 @@
   .month-period-toggle button.active.pm{background:var(--pm-bg);color:var(--pm-text)}
   .month-add-save{flex-shrink:0;padding:3px 8px;font-size:11px}
 
+  /* Drag and drop */
+  .visit-card.dragging,.month-visit.dragging{opacity:.3}
+  .day-cell.drop-target{background:var(--accent-soft)!important;outline:2px dashed var(--accent);outline-offset:-2px}
+  .month-cell.drop-target-am{background:var(--am-bg)!important;box-shadow:inset 0 0 0 2px var(--am-color)}
+  .month-cell.drop-target-pm{background:var(--pm-bg)!important;box-shadow:inset 0 0 0 2px var(--pm-color)}
+  .drag-ghost{position:fixed;pointer-events:none;z-index:9999;opacity:.88;transform:scale(.92) rotate(-1deg);box-shadow:0 6px 20px rgba(0,0,0,.18);border-radius:6px;max-width:200px}
+
   .toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.78);color:#fff;padding:10px 18px;border-radius:var(--radius-sm);font-size:13px;z-index:200;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(6px)}
   .stats-bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
@@ -548,7 +555,7 @@ function renderDayCell(items,day,period,today){
     .sort((a,b)=>(a.status==='completed'?1:0)-(b.status==='completed'?1:0))
     .map(v=>{
       const done=v.status==='completed';
-      return `<div class="visit-card ${cClass} ${done?'completed':''}" data-id="${v.id}">
+      return `<div class="visit-card ${cClass} ${done?'completed':''}" data-id="${v.id}" draggable="true">
         <button class="card-check" data-toggle="${v.id}" aria-label="${done?'取消完成':'标记完成'}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
         </button>
@@ -582,7 +589,7 @@ function renderMonth(){
       const show=expanded?items:items.slice(0,3);
       visitsHtml=show.map(v=>{
         const done=v.status==='completed',cc=cardClass(v.period);
-        return `<div class="month-visit ${cc} ${done?'completed':''}" data-id="${v.id}">
+        return `<div class="month-visit ${cc} ${done?'completed':''}" data-id="${v.id}" draggable="true">
           <span class="mini-check" data-toggle="${v.id}"></span>
           <span class="month-visit-title" data-edit="${v.id}">${escapeHtml(v.title)}</span>
           <span class="month-del" data-delete="${v.id}">×</span>
@@ -688,6 +695,34 @@ function deleteVisit(id){
   state.visits=state.visits.filter(v=>v.id!==id);saveDelete(id);render();toast('已删除');
 }
 
+/* ========== Drag move ========== */
+function moveVisit(id,newDate,newPeriod){
+  const v=state.visits.find(x=>x.id===id);if(!v)return;
+  if(v.date===newDate&&v.period===newPeriod)return;
+  v.date=newDate;v.period=newPeriod;v.updated_at=new Date().toISOString();
+  saveVisit(id);render();toast('已移动');
+}
+function clearDropHighlights(){document.querySelectorAll('.drop-target,.drop-target-am,.drop-target-pm').forEach(el=>el.classList.remove('drop-target','drop-target-am','drop-target-pm'));}
+function highlightCell(cell,y){
+  clearDropHighlights();
+  if(cell.classList.contains('day-cell')){cell.classList.add('drop-target');return}
+  if(cell.classList.contains('month-cell')){
+    const rect=cell.getBoundingClientRect();
+    const isAM=(y-rect.top)<rect.height/2;
+    cell.classList.add(isAM?'drop-target-am':'drop-target-pm');
+  }
+}
+function handleDrop(id,cell,x,y){
+  if(cell.classList.contains('day-cell')){const[date,period]=cell.dataset.zone.split('|');moveVisit(id,date,period);}
+  else if(cell.classList.contains('month-cell')){const date=cell.dataset.mdate;const rect=cell.getBoundingClientRect();const isAM=(y-rect.top)<rect.height/2;moveVisit(id,date,isAM?'morning':'afternoon');}
+}
+function findCellAtPoint(x,y,ghost){
+  if(ghost)ghost.style.display='none';
+  const el=document.elementFromPoint(x,y);
+  if(ghost)ghost.style.display='';
+  return el?el.closest('.day-cell,.month-cell'):null;
+}
+
 /* ========== Events ========== */
 function bind(){
   $$('.seg button').forEach(btn=>btn.addEventListener('click',()=>{
@@ -733,6 +768,87 @@ function bind(){
       if(dateStr){startMonthAdd(dateStr,mcell);return}
     }
   });
+
+  // ===== Drag and Drop (desktop) =====
+  let dragId=null;
+  const cal=$('#calendarContainer');
+  cal.addEventListener('dragstart',e=>{
+    const card=e.target.closest('[data-id]');if(!card)return;
+    if(e.target.closest('[data-toggle]')||e.target.closest('[data-delete]')||e.target.closest('[data-edit]')){e.preventDefault();return}
+    dragId=card.dataset.id;card.classList.add('dragging');
+    e.dataTransfer.effectAllowed='move';
+    try{e.dataTransfer.setData('text/plain',dragId);}catch(_){}
+  });
+  cal.addEventListener('dragend',e=>{
+    const card=e.target.closest('[data-id]');if(card)card.classList.remove('dragging');
+    clearDropHighlights();dragId=null;
+  });
+  cal.addEventListener('dragover',e=>{
+    if(!dragId)return;e.preventDefault();
+    const cell=e.target.closest('.day-cell,.month-cell');
+    if(cell)highlightCell(cell,e.clientY);else clearDropHighlights();
+  });
+  cal.addEventListener('drop',e=>{
+    e.preventDefault();if(!dragId)return;
+    const cell=e.target.closest('.day-cell,.month-cell');
+    if(cell)handleDrop(dragId,cell,e.clientX,e.clientY);
+    clearDropHighlights();dragId=null;
+  });
+
+  // ===== Long-press drag (mobile) =====
+  let touchDrag=null;
+  let dragJustEnded=false;
+  cal.addEventListener('touchstart',e=>{
+    const card=e.target.closest('[data-id]');
+    if(!card||e.target.closest('[data-toggle]')||e.target.closest('[data-delete]')||e.target.closest('[data-edit]'))return;
+    const touch=e.touches[0];
+    touchDrag={id:card.dataset.id,cardEl:card,startX:touch.clientX,startY:touch.clientY,timer:null,ghost:null,active:false};
+    touchDrag.timer=setTimeout(()=>{
+      if(!touchDrag)return;
+      touchDrag.active=true;
+      const rect=touchDrag.cardEl.getBoundingClientRect();
+      const ghost=touchDrag.cardEl.cloneNode(true);
+      ghost.classList.add('drag-ghost');
+      ghost.style.width=rect.width+'px';
+      document.body.appendChild(ghost);
+      touchDrag.ghost=ghost;
+      touchDrag.cardEl.classList.add('dragging');
+      // Prevent click after drag
+      e.preventDefault();
+    },500);
+  },{passive:false});
+  cal.addEventListener('touchmove',e=>{
+    if(!touchDrag)return;
+    const touch=e.touches[0];
+    if(!touchDrag.active){
+      const dx=touch.clientX-touchDrag.startX,dy=touch.clientY-touchDrag.startY;
+      if(dx*dx+dy*dy>100){clearTimeout(touchDrag.timer);touchDrag=null;}
+      return;
+    }
+    e.preventDefault();
+    if(touchDrag.ghost){touchDrag.ghost.style.left=(touch.clientX-30)+'px';touchDrag.ghost.style.top=(touch.clientY-20)+'px';}
+    const cell=findCellAtPoint(touch.clientX,touch.clientY,touchDrag.ghost);
+    if(cell)highlightCell(cell,touch.clientY);else clearDropHighlights();
+  },{passive:false});
+  cal.addEventListener('touchend',e=>{
+    if(!touchDrag){return;}
+    clearTimeout(touchDrag.timer);
+    if(touchDrag.active){
+      e.preventDefault();
+      const touch=e.changedTouches[0];
+      const cell=findCellAtPoint(touch.clientX,touch.clientY,touchDrag.ghost);
+      if(cell)handleDrop(touchDrag.id,cell,touch.clientX,touch.clientY);
+      if(touchDrag.ghost)touchDrag.ghost.remove();
+      if(touchDrag.cardEl)touchDrag.cardEl.classList.remove('dragging');
+      clearDropHighlights();
+      dragJustEnded=true;
+    }
+    touchDrag=null;
+  },{passive:false});
+  // Suppress click right after drag
+  cal.addEventListener('click',e=>{
+    if(dragJustEnded){dragJustEnded=false;e.stopPropagation();e.preventDefault();return;}
+  },true);
 
   // Export / Import
   $('#exportBtn').addEventListener('click',()=>{
